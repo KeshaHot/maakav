@@ -262,7 +262,25 @@ function markChips() {
 }
 
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-var rec = null, listening = false;
+var rec = null, listening = false, micTimer = null;
+
+function micReset() {
+  listening = false;
+  clearTimeout(micTimer); micTimer = null;
+  $('mic').className = 'mic';
+  $('mic').textContent = '🎙 Говорить';
+}
+
+/* стоп через ms тишины; если onend не придёт — добиваем abort'ом */
+function micArm(ms) {
+  clearTimeout(micTimer);
+  micTimer = setTimeout(function () {
+    try { rec.stop(); } catch (e) {}
+    setTimeout(function () {
+      if (listening) { try { rec.abort(); } catch (e) {} micReset(); applyParse(); }
+    }, 1500);
+  }, ms);
+}
 
 $('mic').onclick = function () {
   if (!SR) {
@@ -271,18 +289,47 @@ $('mic').onclick = function () {
     $('raw').focus();
     return;
   }
-  if (listening) { rec.stop(); return; }
+  if (listening) {
+    try { rec.stop(); } catch (e) {}
+    setTimeout(function () {
+      if (listening) { try { rec.abort(); } catch (e) {} micReset(); applyParse(); }
+    }, 1200);
+    return;
+  }
   rec = new SR();
   rec.lang = $('lang').value;
   rec.interimResults = true;
   rec.continuous = false;
-  rec.onstart = function () { listening = true; $('mic').className = 'mic rec'; $('mic').textContent = '⏹ Слушаю…'; };
+  rec.onstart = function () {
+    listening = true;
+    $('mic').className = 'mic rec';
+    $('mic').textContent = '⏹ Слушаю…';
+    micArm(8000);
+  };
   rec.onresult = function (e) {
     var txt = '';
     for (var i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript + ' ';
     $('raw').value = txt.trim();
-    if (e.results[e.results.length - 1].isFinal) applyParse();
+    micArm(3000);
+    if (e.results[e.results.length - 1].isFinal) { try { rec.stop(); } catch (err) {} }
   };
+  rec.onspeechend = function () { try { rec.stop(); } catch (e) {} };
+  rec.onerror = function (e) {
+    micReset();
+    if (e.error === 'no-speech' || e.error === 'aborted') { applyParse(); return; }
+    $('msg').className = 'msg err';
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      $('msg').textContent = 'Нет доступа к микрофону: разрешите его для этого сайта (замок в адресной строке).';
+    } else if (e.error === 'language-not-supported') {
+      $('msg').textContent = 'Этот язык распознавания недоступен в вашем Chrome. Диктуйте микрофоном на клавиатуре.';
+    } else {
+      $('msg').textContent = 'Ошибка микрофона: ' + e.error;
+    }
+  };
+  rec.onend = function () { micReset(); applyParse(); };
+  $('msg').textContent = '';
+  rec.start();
+};
   rec.onerror = function (e) {
     $('msg').className = 'msg err';
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
