@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>מעכב כספי</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#dcdfe4; --txt:#1b1c1e; --mut:#6b7280; --ok:#1e8e3e; --red:#c5221f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181a; --card:#232528; --line:#3a3d42; --txt:#e8eaed; --mut:#9aa0a6; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--txt);
+         font:16px/1.4 -apple-system,Roboto,"Segoe UI",sans-serif; }
+  h1 { font-size:18px; margin:0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
+  .mic { width:100%; border:0; border-radius:14px; padding:24px; font-size:19px; font-weight:600;
+         background:#1a73e8; color:#fff; }
+  .mic.rec { background:var(--red); }
+  .hint { color:var(--mut); font-size:13px; margin-top:8px; }
+  textarea { width:100%; min-height:52px; font-size:16px; padding:10px; border-radius:10px;
+             border:1px solid var(--line); background:transparent; color:var(--txt); resize:vertical; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  label { display:block; font-size:12px; color:var(--mut); margin-bottom:4px; }
+  input, select { width:100%; font-size:17px; padding:10px; border-radius:10px;
+                  border:1px solid var(--line); background:transparent; color:var(--txt); }
+  .places { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .chip { border:1px solid var(--line); background:transparent; color:var(--txt);
+          border-radius:20px; padding:7px 14px; font-size:15px; }
+  .chip.on { background:#1a73e8; border-color:#1a73e8; color:#fff; }
+  .save { width:100%; border:0; border-radius:14px; padding:18px; font-size:18px; font-weight:600;
+          background:var(--ok); color:#fff; margin-top:12px; }
+  .save:disabled { opacity:.5; }
+  .msg { margin-top:10px; font-size:15px; min-height:20px; }
+  .msg.err { color:var(--red); }
+  .undo, .link { background:transparent; border:1px solid var(--line); color:var(--txt);
+                 border-radius:10px; padding:8px 14px; font-size:14px; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:5px 4px; border-bottom:1px solid var(--line); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.tot td { font-weight:700; background:rgba(0,200,0,.16); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+
+<!-- экран первого запуска -->
+<div id="setup" class="card hidden">
+  <h1>Подключение к таблице</h1>
+  <label>Ссылка веб-приложения Apps Script (…/exec)</label>
+  <input type="url" id="cfgUrl" placeholder="https://script.google.com/macros/s/…/exec">
+  <label style="margin-top:10px">Ключ (API_KEY из Code.gs)</label>
+  <input type="text" id="cfgKey">
+  <button class="save" id="cfgSave">Сохранить</button>
+  <div class="hint">Сохраняется только в этом браузере, на сервер не уходит.</div>
+  <div class="msg" id="cfgMsg"></div>
+</div>
+
+<!-- основной экран -->
+<div id="app" class="hidden">
+  <h1>מעכב כספי — запись голосом</h1>
+
+  <div class="card">
+    <button id="mic" class="mic">🎙 Говорить</button>
+    <div class="grid" style="margin-top:10px">
+      <select id="lang">
+        <option value="ru-RU">Русский</option>
+        <option value="he-IL">עברית</option>
+      </select>
+      <button class="chip" id="clear" style="padding:10px">Очистить</button>
+    </div>
+    <div class="hint">«вчера 250 магазин» · «5 октября 300 каса свои 100» · «היום 80 בית מרקחת»</div>
+    <textarea id="raw" placeholder="Распознанный текст — можно поправить руками"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><label>תאריך — дата</label><input type="date" id="date"></div>
+      <div><label>סכום ש"ח — сумма</label><input type="number" id="amount" inputmode="decimal"></div>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div><label>תשלום שלי — моя оплата</label><input type="number" id="mine" inputmode="decimal"></div>
+      <div><label>מקום — место</label><input type="text" id="place"></div>
+    </div>
+    <div class="places" id="places"></div>
+    <button class="save" id="save">Записать в таблицу</button>
+    <div class="msg" id="msg"></div>
+    <button class="undo hidden" id="undo">Отменить последнюю запись</button>
+  </div>
+
+  <div class="card">
+    <label>Последние записи</label>
+    <table id="last"></table>
+    <button class="link" id="settings">Настройки подключения</button>
+  </div>
+</div>
+
+<script>
+/* ---------- связь с Apps Script ---------- */
+var CFG = { url:'', key:'' };
+
+function loadCfg() {
+  try {
+    CFG.url = localStorage.getItem('maakav_url') || '';
+    CFG.key = localStorage.getItem('maakav_key') || '';
+  } catch (e) { /* приватный режим — останемся на экране настройки */ }
+  return CFG.url && CFG.key;
+}
+function saveCfg(url, key) {
+  CFG.url = url; CFG.key = key;
+  try { localStorage.setItem('maakav_url', url); localStorage.setItem('maakav_key', key); } catch (e) {}
+}
+
+/* text/plain — чтобы браузер не слал preflight, который Apps Script не обрабатывает */
+function api(action, payload) {
+  var body = { action: action, key: CFG.key };
+  for (var k in payload) body[k] = payload[k];
+  return fetch(CFG.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+    redirect: 'follow'
+  }).then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (!j.ok) throw new Error(j.error || 'Ошибка сервера');
+      return j.data;
+    });
+}
+
+/* ---------- разбор фразы ---------- */
+var MONTHS = {
+  'январ':1,'феврал':2,'март':3,'апрел':4,'мая':5,'май':5,'июн':6,'июл':7,'август':8,
+  'сентябр':9,'октябр':10,'ноябр':11,'декабр':12,
+  'ינואר':1,'פברואר':2,'מרץ':3,'אפריל':4,'מאי':5,'יוני':6,'יולי':7,'אוגוסט':8,
+  'ספטמבר':9,'אוקטובר':10,'נובמבר':11,'דצמבר':12
+};
+
+/* Слово -> что писать в колонку מקום. Дополняйте под себя. */
+var PLACES = [
+  { he:'חנות',      words:['магазин','ханут','лавк','חנות','продукт'] },
+  { he:'בית מרקחת', words:['аптек','маркахат','מרקחת'] },
+  { he:'קש',        words:['каш','кэш','кеш','каса','касса','наличн','קש'] }
+];
+
+function shiftDays(n) { var d = new Date(); d.setDate(d.getDate() + n); return d; }
+function iso(d) {
+  return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+}
+
+function parsePhrase(rawText) {
+  var t = ' ' + String(rawText).toLowerCase().replace(/[,;]/g,' ').replace(/\s+/g,' ') + ' ';
+  var res = { date:null, amount:null, mine:null, place:'' };
+
+  if (/позавчера/.test(t))        { res.date = shiftDays(-2); t = t.replace(/позавчера/g,' '); }
+  else if (/вчера|אתמול/.test(t)) { res.date = shiftDays(-1); t = t.replace(/вчера|אתמול/g,' '); }
+  else if (/сегодня|היום/.test(t)){ res.date = shiftDays(0);  t = t.replace(/сегодня|היום/g,' '); }
+
+  if (!res.date) {
+    var m = t.match(/(\d{1,2})\s*[.\/-]\s*(\d{1,2})(?:\s*[.\/-]\s*(\d{2,4}))?/);
+    if (m) {
+      var y = m[3] ? Number(m[3]) : new Date().getFullYear();
+      if (y < 100) y += 2000;
+      res.date = new Date(y, Number(m[2]) - 1, Number(m[1]));
+      t = t.replace(m[0], ' ');
+    }
+  }
+  if (!res.date) {
+    for (var key in MONTHS) {
+      var mm = t.match(new RegExp('(\\d{1,2})\\s*' + key + '[а-яё]*'));
+      if (mm) {
+        res.date = new Date(new Date().getFullYear(), MONTHS[key] - 1, Number(mm[1]));
+        if (res.date - new Date() > 86400000 * 30) res.date.setFullYear(res.date.getFullYear() - 1);
+        t = t.replace(mm[0], ' ');
+        break;
+      }
+    }
+  }
+  if (!res.date) res.date = shiftDays(0);
+
+  var my = t.match(/(?:свои|своих|мои|моих|сам|שלי|שילמתי)\D{0,12}(\d+(?:[.,]\d+)?)/);
+  if (!my) my = t.match(/(\d+(?:[.,]\d+)?)\D{0,12}(?:свои|своих|мои|моих|שלי)/);
+  if (my) { res.mine = Number(my[1].replace(',', '.')); t = t.replace(my[0], ' '); }
+
+  var nums = t.match(/\d+(?:[.,]\d+)?/g);
+  if (nums && nums.length) { res.amount = Number(nums[0].replace(',', '.')); t = t.replace(nums[0], ' '); }
+
+  if (res.mine === null && res.amount !== null &&
+      /(всё|все|полностью|целиком|הכל)/.test(t) && /(свои|своё|мои|שלי)/.test(t)) {
+    res.mine = res.amount;
+  }
+
+  for (var i = 0; i < PLACES.length; i++) {
+    for (var j = 0; j < PLACES[i].words.length; j++) {
+      if (t.indexOf(PLACES[i].words[j]) > -1) { res.place = PLACES[i].he; break; }
+    }
+    if (res.place) break;
+  }
+  if (!res.place) {
+    var rest = t.replace(/шекел[а-яё]*|שקל[ים]*|рубл[а-яё]*/g, ' ').replace(/[^\p{L}\s]/gu, ' ').trim();
+    if (rest) res.place = rest.split(/\s+/).slice(0, 3).join(' ');
+  }
+  return res;
+}
+
+/* ---------- UI ---------- */
+var $ = function (id) { return document.getElementById(id); };
+
+function show(what) {
+  $('setup').className = what === 'setup' ? 'card' : 'card hidden';
+  $('app').className   = what === 'app' ? '' : 'hidden';
+}
+
+$('cfgSave').onclick = function () {
+  var u = $('cfgUrl').value.trim(), k = $('cfgKey').value.trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(u)) {
+    $('cfgMsg').className = 'msg err';
+    $('cfgMsg').textContent = 'Ссылка должна заканчиваться на /exec';
+    return;
+  }
+  if (!k) { $('cfgMsg').className = 'msg err'; $('cfgMsg').textContent = 'Введите ключ'; return; }
+  saveCfg(u, k);
+  $('cfgMsg').className = 'msg';
+  $('cfgMsg').textContent = 'Проверяю…';
+  api('last', {}).then(function (rows) { show('app'); renderLast(rows); loadPlaces(); })
+                 .catch(function (e) {
+                   $('cfgMsg').className = 'msg err';
+                   $('cfgMsg').textContent = 'Не вышло: ' + e.message;
+                 });
+};
+
+$('settings').onclick = function () {
+  $('cfgUrl').value = CFG.url; $('cfgKey').value = CFG.key; $('cfgMsg').textContent = '';
+  show('setup');
+};
+
+function applyParse() {
+  var p = parsePhrase($('raw').value);
+  $('date').value = iso(p.date);
+  $('amount').value = p.amount === null ? '' : p.amount;
+  $('mine').value = p.mine === null ? '' : p.mine;
+  $('place').value = p.place;
+  markChips();
+}
+
+function markChips() {
+  var v = $('place').value.trim();
+  var chips = document.querySelectorAll('#places .chip');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].className = (chips[i].textContent === v) ? 'chip on' : 'chip';
+  }
+}
+
+var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+var rec = null, listening = false;
+
+$('mic').onclick = function () {
+  if (!SR) {
+    $('msg').className = 'msg err';
+    $('msg').textContent = 'Этот браузер не умеет распознавать речь (Safari на iPhone). Диктуйте микрофоном на клавиатуре в поле текста.';
+    $('raw').focus();
+    return;
+  }
+  if (listening) { rec.stop(); return; }
+  rec = new SR();
+  rec.lang = $('lang').value;
+  rec.interimResults = true;
+  rec.continuous = false;
+  rec.onstart = function () { listening = true; $('mic').className = 'mic rec'; $('mic').textContent = '⏹ Слушаю…'; };
+  rec.onresult = function (e) {
+    var txt = '';
+    for (var i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript + ' ';
+    $('raw').value = txt.trim();
+    if (e.results[e.results.length - 1].isFinal) applyParse();
+  };
+  rec.onerror = function (e) {
+    $('msg').className = 'msg err';
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      $('msg').textContent = 'Нет доступа к микрофону: разрешите его для этого сайта (замок в адресной строке).';
+    } else if (e.error === 'no-speech') {
+      $('msg').textContent = 'Ничего не услышал, попробуйте ещё раз.';
+    } else {
+      $('msg').textContent = 'Ошибка микрофона: ' + e.error;
+    }
+  };
+  rec.onend = function () { listening = false; $('mic').className = 'mic'; $('mic').textContent = '🎙 Говорить'; applyParse(); };
+  $('msg').textContent = '';
+  rec.start();
+};
+
+$('raw').onblur = applyParse;
+$('place').oninput = markChips;
+
+$('clear').onclick = function () {
+  $('raw').value = ''; $('amount').value = ''; $('mine').value = ''; $('place').value = '';
+  $('date').value = iso(new Date()); markChips();
+};
+
+var lastSavedRow = null;
+
+$('save').onclick = function () {
+  var d = $('date').value, a = $('amount').value;
+  if (!d || a === '') { $('msg').className = 'msg err'; $('msg').textContent = 'Нужны дата и сумма'; return; }
+  var p = d.split('-');
+  $('save').disabled = true;
+  $('msg').className = 'msg';
+  $('msg').textContent = 'Записываю…';
+  api('add', { entry: {
+    year: Number(p[0]), month: Number(p[1]), day: Number(p[2]),
+    amount: Number(a),
+    myPayment: $('mine').value === '' ? '' : Number($('mine').value),
+    place: $('place').value.trim()
+  }}).then(function (r) {
+    lastSavedRow = r.row;
+    $('save').disabled = false;
+    $('undo').className = 'undo';
+    renderLast(r.lastRows);
+    $('clear').onclick();
+    var txt = '✓ Записано в строку ' + r.row;
+    if (r.closed) txt += ' · закрыт месяц ' + r.closed.label + ': ' + r.closed.total + ' ₪ (моих ' + r.closed.mine + ')';
+    $('msg').textContent = txt;
+  }).catch(function (e) {
+    $('save').disabled = false;
+    $('msg').className = 'msg err';
+    $('msg').textContent = 'Ошибка: ' + e.message;
+  });
+};
+
+$('undo').onclick = function () {
+  if (!lastSavedRow) return;
+  $('msg').className = 'msg';
+  $('msg').textContent = 'Удаляю…';
+  api('delete', { row: lastSavedRow }).then(function (r) {
+    $('msg').textContent = 'Запись отменена';
+    $('undo').className = 'undo hidden';
+    lastSavedRow = null;
+    renderLast(r.lastRows);
+  }).catch(function (e) {
+    $('msg').className = 'msg err';
+    $('msg').textContent = 'Ошибка: ' + e.message;
+  });
+};
+
+function renderLast(rows) {
+  var html = '';
+  for (var i = 0; i < rows.length; i++) {
+    html += '<tr' + (rows[i].total ? ' class="tot"' : '') + '><td>' + rows[i].date +
+            '</td><td class="num">' + rows[i].amount + '</td><td class="num">' + rows[i].mine +
+            '</td><td>' + rows[i].place + '</td></tr>';
+  }
+  $('last').innerHTML = html;
+}
+
+function renderPlaces(list) {
+  var html = '';
+  for (var i = 0; i < list.length; i++) {
+    html += '<button class="chip" onclick="pick(this)">' + list[i] + '</button>';
+  }
+  $('places').innerHTML = html;
+  markChips();
+}
+function pick(btn) { $('place').value = btn.textContent; markChips(); }
+function loadPlaces() { api('places', {}).then(renderPlaces).catch(function () {}); }
+
+/* старт */
+$('date').value = iso(new Date());
+if (loadCfg()) {
+  show('app');
+  api('last', {}).then(renderLast).catch(function (e) {
+    $('msg').className = 'msg err';
+    $('msg').textContent = 'Нет связи с таблицей: ' + e.message;
+  });
+  loadPlaces();
+} else {
+  show('setup');
+}
+</script>
+</body>
+</html>
