@@ -120,8 +120,19 @@ function api(action, payload) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body),
     redirect: 'follow'
-  }).then(function (r) { return r.json(); })
-    .then(function (j) {
+  }).then(function (r) { return r.text(); })
+    .then(function (txt) {
+      var j;
+      try {
+        j = JSON.parse(txt);
+      } catch (e) {
+        if (/<!doctype|<html/i.test(txt)) {
+          throw new Error('Вместо данных пришла страница Google. Обычно это значит: в развёртывании ' +
+                          'доступ не «Все», либо после правки кода не выпущена новая версия, ' +
+                          'либо указана ссылка /dev вместо /exec.');
+        }
+        throw new Error('Непонятный ответ сервера: ' + txt.slice(0, 80));
+      }
       if (!j.ok) throw new Error(j.error || 'Ошибка сервера');
       return j.data;
     });
