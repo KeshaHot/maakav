@@ -330,20 +330,6 @@ $('mic').onclick = function () {
   $('msg').textContent = '';
   rec.start();
 };
-  rec.onerror = function (e) {
-    $('msg').className = 'msg err';
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-      $('msg').textContent = 'Нет доступа к микрофону: разрешите его для этого сайта (замок в адресной строке).';
-    } else if (e.error === 'no-speech') {
-      $('msg').textContent = 'Ничего не услышал, попробуйте ещё раз.';
-    } else {
-      $('msg').textContent = 'Ошибка микрофона: ' + e.error;
-    }
-  };
-  rec.onend = function () { listening = false; $('mic').className = 'mic'; $('mic').textContent = '🎙 Говорить'; applyParse(); };
-  $('msg').textContent = '';
-  rec.start();
-};
 
 $('raw').onblur = applyParse;
 $('place').oninput = markChips;
