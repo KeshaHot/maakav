@@ -39,6 +39,10 @@
   td { padding:5px 4px; border-bottom:1px solid var(--line); }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   tr.tot td { font-weight:700; background:rgba(0,200,0,.16); }
+  td.del { width:44px; text-align:center; }
+  .x { border:1px solid var(--line); background:transparent; color:var(--mut);
+       border-radius:8px; padding:4px 9px; font-size:14px; }
+  .x.arm { background:var(--red); border-color:var(--red); color:#fff; }
   .hidden { display:none; }
 </style>
 </head>
@@ -89,8 +93,10 @@
   </div>
 
   <div class="card">
-    <label>Последние записи</label>
+    <label>Последние записи — ✕ удаляет строку (нажать дважды)</label>
     <table id="last"></table>
+    <div class="msg" id="delMsg"></div>
+    <button class="link" id="refresh">Обновить</button>
     <button class="link" id="settings">Настройки подключения</button>
   </div>
 </div>
@@ -384,15 +390,70 @@ $('undo').onclick = function () {
   });
 };
 
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 function renderLast(rows) {
   var html = '';
   for (var i = 0; i < rows.length; i++) {
-    html += '<tr' + (rows[i].total ? ' class="tot"' : '') + '><td>' + rows[i].date +
-            '</td><td class="num">' + rows[i].amount + '</td><td class="num">' + rows[i].mine +
-            '</td><td>' + rows[i].place + '</td></tr>';
+    var r = rows[i];
+    html += '<tr' + (r.total ? ' class="tot"' : '') + '>' +
+            '<td>' + esc(r.date) + '</td>' +
+            '<td class="num">' + esc(r.amount) + '</td>' +
+            '<td class="num">' + esc(r.mine) + '</td>' +
+            '<td>' + esc(r.place) + '</td>' +
+            '<td class="del"><button class="x" data-row="' + r.row + '">✕</button></td></tr>';
   }
   $('last').innerHTML = html;
+  $('delMsg').textContent = '';
 }
+
+/* удаление: первое нажатие взводит кнопку, второе удаляет (confirm внутри iframe может быть заблокирован) */
+var armed = null, armTimer = null;
+
+function disarm() {
+  if (armed) { armed.className = 'x'; armed.textContent = '✕'; }
+  armed = null;
+  clearTimeout(armTimer);
+}
+
+$('last').onclick = function (ev) {
+  var b = ev.target;
+  if (!b || b.tagName !== 'BUTTON') return;
+  var row = Number(b.getAttribute('data-row'));
+
+  if (armed !== b) {
+    disarm();
+    armed = b;
+    b.className = 'x arm';
+    b.textContent = 'Удалить?';
+    armTimer = setTimeout(disarm, 5000);
+    return;
+  }
+
+  var cells = b.parentNode.parentNode.getElementsByTagName('td');
+  var expect = { date: cells[0].textContent, amount: cells[1].textContent, place: cells[3].textContent };
+  disarm();
+  $('delMsg').className = 'msg';
+  $('delMsg').textContent = 'Удаляю строку ' + row + '…';
+  api('delete', { row: row, expect: expect }).then(function (r) {
+    renderLast(r.lastRows);
+    $('delMsg').className = 'msg';
+    $('delMsg').textContent = 'Удалено: ' + r.removed;
+    if (lastSavedRow === row) { lastSavedRow = null; $('undo').className = 'undo hidden'; }
+  }).catch(function (e) {
+    $('delMsg').className = 'msg err';
+    $('delMsg').textContent = 'Ошибка: ' + e.message;
+  });
+};
+
+$('refresh').onclick = function () {
+  api('last', {}).then(renderLast).catch(function (e) {
+    $('delMsg').className = 'msg err';
+    $('delMsg').textContent = 'Ошибка: ' + e.message;
+  });
+};
 
 function renderPlaces(list) {
   var html = '';
